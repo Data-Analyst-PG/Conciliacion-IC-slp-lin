@@ -20,8 +20,8 @@ if "match_ledger" not in st.session_state:
     st.session_state.match_ledger = crear_ledger()
 
 # ─── Header ───
-st.title("📊 SET Freight — Conciliación Contable")
-st.caption("Sistema de matching y conciliación financiera · Ingresos · Costos · Crossmatch")
+st.title("📊 Conciliación SAC vs STAR")
+st.caption("Sistema de matching y conciliación · Ingresos · Costos · Crossmatch")
 
 st.markdown("""
 Esta aplicación centraliza los procesos de conciliación financiera:
