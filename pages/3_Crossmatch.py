@@ -1,7 +1,7 @@
 """
 pages/3_Crossmatch.py
 Investigación de registros NO_EXISTE_EN_CONTABILIDAD_D.
-Solo informativo: NO consume del ledger.
+Lee Contabilidad completa de session_state. Solo informativo, no consume ledger.
 """
 
 import streamlit as st
@@ -11,174 +11,175 @@ from core.engines.crossmatch import analizar_crossmatch
 from core.ledger import crear_ledger, get_resumen_ledger
 
 st.set_page_config(page_title="Crossmatch – Investigación", layout="wide")
-st.title("🔍 Crossmatch — Investigación de No Encontrados")
-st.caption("Analiza registros NO_EXISTE_EN_CONTABILIDAD_D buscando CA, PD y H • Solo informativo, no consume ledger")
+st.title("🔍 Módulo 3 — Crossmatch · Investigación de No Encontrados")
+st.caption("Analiza NO_EXISTE_EN_CONTABILIDAD_D buscando CA, PD y H • Solo informativo, no consume ledger")
 
-# ─── Ledger global ───
+# ─── Verificar contabilidad global ───
+if "cont_global" not in st.session_state:
+    st.error("⚠️ Primero carga la **Contabilidad** en la página principal (inicio).")
+    st.stop()
+
 if "match_ledger" not in st.session_state:
     st.session_state.match_ledger = crear_ledger()
+
+cont_global = st.session_state["cont_global"]
+st.info(
+    f"📂 Contabilidad: **{st.session_state['cont_file_name']}** · "
+    f"Total movimientos: **{len(cont_global):,}**"
+)
 
 # ─── Sidebar ───
 with st.sidebar:
     st.header("📁 Archivos")
     reporte_file = st.file_uploader(
-        "Reporte Base Saldos clasificado",
+        "Reporte Base Saldos clasificado (con columna ESTATUS_MATCH)",
         type=["xlsx","xls","xlsm","csv"],
-        help="Archivo con columna ESTATUS_MATCH ya calculada por el proceso de Costos.",
+        help="Descargado del Módulo 2 — hoja Base_clasificada.",
     )
-    cont_file = st.file_uploader("Contabilidad completa", type=["xlsx","xls","xlsm","csv"])
     st.divider()
 
     st.header("⚙️ Configuración")
-    muestra       = st.checkbox("Modo prueba (1,000 registros)", value=False)
-    bonif_min     = st.number_input("Bonif. diesel mín ($)", 0.0, 100.0, 10.0, step=1.0)
-    bonif_max     = st.number_input("Bonif. diesel máx ($)", 0.0, 500.0, 20.0, step=1.0)
-    usar_ledger   = st.checkbox("Excluir mov. ya consumidos (ledger)", value=True,
-                                help="Informa qué mov. contables ya fueron bloqueados por Ingresos o Costos.")
+    muestra    = st.checkbox("Modo prueba (1,000 registros)", value=False)
+    bonif_min  = st.number_input("Bonif. diesel mín ($)", 0.0, 100.0, 10.0, step=1.0)
+    bonif_max  = st.number_input("Bonif. diesel máx ($)", 0.0, 500.0, 20.0, step=1.0)
+    usar_ledger= st.checkbox("Excluir mov. ya consumidos (ledger)", value=True,
+                             help="Informa qué mov. contables ya fueron bloqueados por módulos anteriores.")
     st.divider()
     run = st.button("🚀 Analizar", type="primary", use_container_width=True)
 
-# ─── Ledger info ───
+# ─── Estado ledger en sidebar ───
 resumen_led = get_resumen_ledger(st.session_state.match_ledger)
+st.sidebar.divider()
 st.sidebar.caption(
-    f"🔒 Ledger actual: {resumen_led['consumidos']} bloqueados | "
+    f"🔒 Ledger: {resumen_led['consumidos']} bloqueados · "
     f"Procesos: {', '.join(resumen_led['procesos']) or 'ninguno'}"
 )
 
-if not reporte_file or not cont_file:
-    st.info("👈 Carga ambos archivos para iniciar.")
-
+if not reporte_file:
+    st.info("👈 Carga el reporte de Base Saldos clasificado para continuar.")
     st.markdown("""
     ### Flujo esperado
-    1. Ejecuta **Ingresos** (página 1) → genera ledger
-    2. Ejecuta **Costos** (página 2) → enriquece ledger
-    3. El archivo de reporte debe tener la columna `ESTATUS_MATCH`
-    4. Esta página filtra los `NO_EXISTE_EN_CONTABILIDAD_D` y busca en CA, PD y H
-
-    ### Velocidad esperada
-    - 1K registros: ~10s
-    - 5K registros: ~25s
-    - 23K registros: ~60s
+    1. **Módulo 1 (Ingresos)** → genera resultados y actualiza ledger
+    2. **Módulo 2 (Costos)** → genera resultados, descarga el Excel
+    3. **Este módulo** → sube la hoja `Base_clasificada` del Excel de Costos
+    4. Filtra los `NO_EXISTE_EN_CONTABILIDAD_D` y busca en pólizas CA, PD y H
     """)
     st.stop()
 
-if not run:
-    st.info("Configura y presiona **Analizar**.")
-    st.stop()
-
-# ─── Carga ───
-try:
-    df_reporte = read_table(reporte_file)
-    df_cont    = read_table(cont_file, preferred_sheet="ContabilidadSET_PLUS_datos")
-except Exception as e:
-    st.error(f"Error al leer archivos: {e}")
-    st.stop()
-
-# ─── Validar columna ESTATUS_MATCH ───
-if "ESTATUS_MATCH" not in df_reporte.columns:
-    st.error(
-        "❌ El reporte no tiene la columna `ESTATUS_MATCH`. "
-        "Primero ejecuta el proceso de **Costos** y descarga el resultado."
-    )
-    st.stop()
-
-df_no_existe = df_reporte[df_reporte["ESTATUS_MATCH"] == "NO_EXISTE_EN_CONTABILIDAD_D"].copy()
-
-if df_no_existe.empty:
-    st.success("✅ No hay registros con ESTATUS_MATCH = NO_EXISTE_EN_CONTABILIDAD_D.")
-    st.stop()
-
-if muestra:
-    df_no_existe = df_no_existe.head(1000)
-    st.warning(f"⚠️ Modo prueba activo: procesando {len(df_no_existe):,} registros.")
-
-st.write(f"📊 **Registros a investigar:** {len(df_no_existe):,} | **Contabilidad total:** {len(df_cont):,}")
-
-# ─── Analizar ───
-ledger = st.session_state.match_ledger if usar_ledger else crear_ledger()
-
-resultado = analizar_crossmatch(
-    df_no_existe,
-    df_cont,
-    ledger=ledger,
-    bonif_min=bonif_min,
-    bonif_max=bonif_max,
+# ─── Control de re-proceso ───
+sig = (
+    reporte_file.name,
+    muestra, bonif_min, bonif_max, usar_ledger,
+    st.session_state.get("cont_file_name",""),
+    resumen_led["consumidos"],
 )
+if st.session_state.get("crossmatch_sig") != sig:
+    st.session_state["crossmatch_result"] = None
 
-# ─── Métricas ───
+if not run and st.session_state.get("crossmatch_result") is None:
+    st.info("Configura y presiona **🚀 Analizar**.")
+    st.stop()
+
+# ─── Procesar ───
+if run or st.session_state.get("crossmatch_result") is None:
+
+    with st.spinner("Cargando reporte..."):
+        try:
+            df_reporte = read_table(reporte_file)
+        except Exception as e:
+            st.error(f"Error leyendo reporte: {e}")
+            st.stop()
+
+    if "ESTATUS_MATCH" not in df_reporte.columns:
+        st.error(
+            "❌ El reporte no tiene la columna `ESTATUS_MATCH`. "
+            "Asegúrate de subir la hoja **Base_clasificada** del Excel generado por el Módulo 2."
+        )
+        st.stop()
+
+    df_no_existe = df_reporte[df_reporte["ESTATUS_MATCH"] == "NO_EXISTE_EN_CONTABILIDAD_D"].copy()
+
+    if df_no_existe.empty:
+        st.success("✅ No hay registros con ESTATUS_MATCH = NO_EXISTE_EN_CONTABILIDAD_D.")
+        st.stop()
+
+    if muestra:
+        df_no_existe = df_no_existe.head(1000)
+        st.warning(f"⚠️ Modo prueba: {len(df_no_existe):,} registros.")
+
+    st.write(f"📊 Registros a investigar: **{len(df_no_existe):,}**")
+
+    # Usar contabilidad del session_state (ya cargada, no se vuelve a leer)
+    ledger = st.session_state.match_ledger if usar_ledger else crear_ledger()
+
+    resultado = analizar_crossmatch(
+        df_no_existe,
+        cont_global,           # ← del session_state, no de un file_uploader
+        ledger=ledger,
+        bonif_min=bonif_min,
+        bonif_max=bonif_max,
+    )
+
+    st.session_state["crossmatch_result"] = resultado
+    st.session_state["crossmatch_sig"]    = sig
+
+# ─── Mostrar resultados ───
+resultado = st.session_state["crossmatch_result"]
+total     = len(resultado)
+
+resumen_df = resultado["TIPO_CASO"].value_counts().reset_index()
+resumen_df.columns = ["Tipo", "Cantidad"]
+resumen_df["% del total"] = (resumen_df["Cantidad"] / total * 100).round(2)
+
 st.divider()
-total = len(resultado)
-resumen = resultado["TIPO_CASO"].value_counts().reset_index()
-resumen.columns = ["Tipo", "Cantidad"]
-resumen["% del total"] = (resumen["Cantidad"] / total * 100).round(2)
-
 c1,c2,c3,c4,c5 = st.columns(5)
-c1.metric("Total analizados", f"{total:,}")
-c2.metric("✅ Bonif. Diesel",  int((resultado["TIPO_CASO"]=="BONIFICACION_DIESEL").sum()))
-c3.metric("✅ Completos",       int(resultado["TIPO_CASO"].str.contains("COMPLETO",na=False).sum()))
-c4.metric("⚠️ Solo Cargo",     int(resultado["TIPO_CASO"].str.contains("SOLO_CARGO",na=False).sum()))
-c5.metric("❌ No encontrado",   int((resultado["TIPO_CASO"]=="NO_ENCONTRADO").sum()))
+c1.metric("Total analizados",   f"{total:,}")
+c2.metric("✅ Bonif. Diesel",   int((resultado["TIPO_CASO"]=="BONIFICACION_DIESEL").sum()))
+c3.metric("✅ Completos",        int(resultado["TIPO_CASO"].str.contains("COMPLETO",na=False).sum()))
+c4.metric("⚠️ Solo Cargo",      int(resultado["TIPO_CASO"].str.contains("SOLO_CARGO",na=False).sum()))
+c5.metric("❌ No encontrado",    int((resultado["TIPO_CASO"]=="NO_ENCONTRADO").sum()))
 
-# ─── Distribución ───
 st.subheader("Distribución por tipo de caso")
-st.dataframe(resumen, hide_index=True, use_container_width=True)
+st.dataframe(resumen_df, hide_index=True, use_container_width=True)
 
-# ─── Tabs detalle ───
 st.divider()
-tab_bonif, tab_comp, tab_solo, tab_no_enc, tab_todo = st.tabs([
-    "💰 Bonif. Diesel",
-    "✅ Completos",
-    "⚠️ Solo Cargo/Abono",
-    "❌ No Encontrado",
-    "📋 Todo",
+tab_bonif, tab_comp, tab_solo, tab_no, tab_todo = st.tabs([
+    "💰 Bonif. Diesel", "✅ Completos", "⚠️ Solo Cargo/Abono", "❌ No Encontrado", "📋 Todo",
 ])
 
 with tab_bonif:
-    df_b = resultado[resultado["TIPO_CASO"] == "BONIFICACION_DIESEL"]
-    st.caption(f"{len(df_b):,} registros")
-    show_df(df_b)
-
+    df_b = resultado[resultado["TIPO_CASO"]=="BONIFICACION_DIESEL"]
+    st.caption(f"{len(df_b):,} registros"); show_df(df_b)
 with tab_comp:
-    df_c = resultado[resultado["TIPO_CASO"].str.contains("COMPLETO", na=False)]
-    st.caption(f"{len(df_c):,} registros")
-    show_df(df_c)
-
+    df_c = resultado[resultado["TIPO_CASO"].str.contains("COMPLETO",na=False)]
+    st.caption(f"{len(df_c):,} registros"); show_df(df_c)
 with tab_solo:
-    df_s = resultado[resultado["TIPO_CASO"].str.contains("SOLO", na=False)]
-    st.caption(f"{len(df_s):,} registros")
-    show_df(df_s)
-
-with tab_no_enc:
-    df_n = resultado[resultado["TIPO_CASO"] == "NO_ENCONTRADO"]
-    st.caption(f"{len(df_n):,} registros")
-    show_df(df_n)
-
+    df_s = resultado[resultado["TIPO_CASO"].str.contains("SOLO",na=False)]
+    st.caption(f"{len(df_s):,} registros"); show_df(df_s)
+with tab_no:
+    df_n = resultado[resultado["TIPO_CASO"]=="NO_ENCONTRADO"]
+    st.caption(f"{len(df_n):,} registros"); show_df(df_n)
 with tab_todo:
-    cols_show = ["DIAGNOSTICO","TIPO_CASO","FOLIO_CONTRARECIBO","NUMERO_VIAJE","Importe",
-                 "Concepto contabilidad","ca_unidad","ca_viaje","pd_poliza","pd_unidad",
-                 "h_poliza","h_unidad","h_owner","bonif_diff"]
-    show_df(resultado[[c for c in cols_show if c in resultado.columns]])
+    cols = ["DIAGNOSTICO","TIPO_CASO","FOLIO_CONTRARECIBO","NUMERO_VIAJE","Importe",
+            "Concepto contabilidad","ca_unidad","ca_viaje","pd_poliza","pd_unidad",
+            "h_poliza","h_unidad","h_owner","bonif_diff"]
+    show_df(resultado[[c for c in cols if c in resultado.columns]])
 
 # ─── Exportar ───
 st.divider()
-def generar_excel(df: pd.DataFrame) -> bytes:
-    sheets = {
-        "Completo":        df,
-        "Bonif_Diesel":    df[df["TIPO_CASO"] == "BONIFICACION_DIESEL"],
-        "Completos":       df[df["TIPO_CASO"].str.contains("COMPLETO", na=False)],
-        "Solo_Cargo":      df[df["TIPO_CASO"].str.contains("SOLO_CARGO", na=False)],
-        "Solo_Abono":      df[df["TIPO_CASO"] == "SOLO_ABONO_H"],
-        "No_Encontrado":   df[df["TIPO_CASO"] == "NO_ENCONTRADO"],
-        "Resumen":         resumen,
-    }
-    return to_excel_bytes({k: prepare_df_for_excel(v) for k, v in sheets.items()})
-
 if st.button("Preparar Excel"):
     with st.spinner("Generando..."):
-        xlsx = generar_excel(resultado)
+        xlsx = to_excel_bytes({
+            "Completo":      prepare_df_for_excel(resultado),
+            "Bonif_Diesel":  prepare_df_for_excel(resultado[resultado["TIPO_CASO"]=="BONIFICACION_DIESEL"]),
+            "Completos":     prepare_df_for_excel(resultado[resultado["TIPO_CASO"].str.contains("COMPLETO",na=False)]),
+            "Solo_Cargo":    prepare_df_for_excel(resultado[resultado["TIPO_CASO"].str.contains("SOLO_CARGO",na=False)]),
+            "Solo_Abono":    prepare_df_for_excel(resultado[resultado["TIPO_CASO"]=="SOLO_ABONO_H"]),
+            "No_Encontrado": prepare_df_for_excel(resultado[resultado["TIPO_CASO"]=="NO_ENCONTRADO"]),
+            "Resumen":       prepare_df_for_excel(resumen_df),
+        })
     st.download_button(
-        "⬇️ Descargar reporte Crossmatch",
-        data=xlsx,
+        "⬇️ Descargar reporte Crossmatch", data=xlsx,
         file_name="reporte_crossmatch.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
